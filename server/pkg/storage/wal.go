@@ -58,7 +58,7 @@ func (w *WAL) Save(hardState raftpb.HardState, entries []raftpb.Entry) error {
 	defer w.mu.Unlock()
 
 	// Save hard state if changed
-	if !raft.IsEmptyHardState(hardState) && !hardState.Equal(&w.hardState) {
+	if !raft.IsEmptyHardState(hardState) && !isHardStateEqual(hardState, w.hardState) {
 		record := WALRecord{
 			Type:      "state",
 			HardState: &hardState,
@@ -233,4 +233,9 @@ func (w *WAL) writeRecord(record WALRecord) error {
 	}
 
 	return nil
+}
+
+// isHardStateEqual compares two HardState structs for equality
+func isHardStateEqual(a, b raftpb.HardState) bool {
+	return a.Term == b.Term && a.Vote == b.Vote && a.Commit == b.Commit
 }

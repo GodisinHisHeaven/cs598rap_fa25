@@ -13,6 +13,7 @@ import (
 	"github.com/cs598rap/raft-kubernetes/server/pkg/config"
 	"github.com/cs598rap/raft-kubernetes/server/pkg/kvstore"
 	"github.com/cs598rap/raft-kubernetes/server/pkg/storage"
+	"github.com/cs598rap/raft-kubernetes/server/pkg/transport"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 )
@@ -34,21 +35,26 @@ type Entry struct {
 
 // RaftNode represents a Raft consensus node
 type RaftNode struct {
-	cfg    *config.Config
-	node   raft.Node
-	store  *kvstore.KVStore
-	wal    *storage.WAL
-	snap   *storage.Snapshotter
-	mu     sync.RWMutex
-	stopped bool
+	cfg       *config.Config
+	node      raft.Node
+	store     *kvstore.KVStore
+	wal       *storage.WAL
+	snap      *storage.Snapshotter
+	transport *transport.Transport
+	mu        sync.RWMutex
+	stopped   bool
 
 	// Raft state
-	appliedIndex uint64
+	appliedIndex  uint64
 	snapshotIndex uint64
 
 	// Proposal channels
 	proposeC    chan string
 	confChangeC chan raftpb.ConfChange
+
+	// Proposal tracking
+	proposalsMu sync.RWMutex
+	proposals   map[uint64]chan error // Index -> result channel
 
 	// Peer management
 	peers map[uint64]string // Raft ID -> Node address
@@ -87,6 +93,7 @@ func NewRaftNode(cfg *config.Config, store *kvstore.KVStore) (*RaftNode, error) 
 		snap:        snap,
 		proposeC:    make(chan string, 100),
 		confChangeC: make(chan raftpb.ConfChange, 10),
+		proposals:   make(map[uint64]chan error),
 		peers:       make(map[uint64]string),
 	}
 
@@ -147,6 +154,25 @@ func (rn *RaftNode) Start() error {
 		return fmt.Errorf("failed to replay WAL: %w", err)
 	}
 
+	// Initialize transport
+	raftID := rn.nodeIDToRaftID(rn.cfg.NodeID)
+	rn.transport = transport.NewTransport(raftID, rn.cfg.RaftAddr, rn)
+	if err := rn.transport.Start(); err != nil {
+		return fmt.Errorf("failed to start transport: %w", err)
+	}
+
+	// Add initial peers to transport
+	peerMap := rn.cfg.GetPeers()
+	for nodeID, addr := range peerMap {
+		if nodeID == rn.cfg.NodeID {
+			// Don't add self as peer
+			continue
+		}
+		peerRaftID := rn.nodeIDToRaftID(nodeID)
+		rn.transport.AddPeer(peerRaftID, addr)
+		rn.peers[peerRaftID] = addr
+	}
+
 	// Start background goroutines
 	go rn.run()
 
@@ -163,6 +189,13 @@ func (rn *RaftNode) Stop() error {
 	}
 	rn.stopped = true
 	rn.mu.Unlock()
+
+	// Stop transport
+	if rn.transport != nil {
+		if err := rn.transport.Stop(); err != nil {
+			log.Printf("Failed to stop transport: %v", err)
+		}
+	}
 
 	rn.node.Stop()
 	if err := rn.wal.Close(); err != nil {
@@ -199,6 +232,33 @@ func (rn *RaftNode) Status() raft.Status {
 	return rn.node.Status()
 }
 
+// GetAppliedIndex returns the current applied index
+func (rn *RaftNode) GetAppliedIndex() uint64 {
+	rn.mu.RLock()
+	defer rn.mu.RUnlock()
+	return rn.appliedIndex
+}
+
+// IsNodeCaughtUp checks if a node has caught up with the leader
+func (rn *RaftNode) IsNodeCaughtUp(nodeID uint64) bool {
+	status := rn.node.Status()
+
+	// Get progress for the node
+	if progress, ok := status.Progress[nodeID]; ok {
+		// Check if the node's Match index is close to the leader's committed index
+		// Allow a small lag (e.g., 10 entries)
+		maxLag := uint64(10)
+		return status.Commit <= progress.Match+maxLag
+	}
+
+	return false
+}
+
+// TransferLeadership transfers leadership to the target node
+func (rn *RaftNode) TransferLeadership(targetID uint64) {
+	rn.node.TransferLeadership(context.Background(), rn.nodeIDToRaftID(rn.cfg.NodeID), targetID)
+}
+
 // run is the main Raft event loop
 func (rn *RaftNode) run() {
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -216,9 +276,8 @@ func (rn *RaftNode) run() {
 			}
 
 			// Send messages to peers
-			for _, msg := range rd.Messages {
-				// TODO: Implement message transport
-				_ = msg
+			if rn.transport != nil && len(rd.Messages) > 0 {
+				rn.transport.SendMessages(rd.Messages)
 			}
 
 			// Apply snapshot
@@ -236,6 +295,9 @@ func (rn *RaftNode) run() {
 					log.Printf("Failed to apply entry: %v", err)
 				}
 				rn.appliedIndex = entry.Index
+
+				// Notify proposal waiters
+				rn.notifyProposal(entry.Index, nil)
 			}
 
 			// Check if we need to create a snapshot
@@ -292,13 +354,25 @@ func (rn *RaftNode) applyEntry(entry raftpb.Entry) error {
 		// Apply configuration change
 		rn.node.ApplyConfChange(cc)
 
-		// Update peer list
+		// Update peer list and transport
 		switch cc.Type {
 		case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
-			// TODO: Add peer to transport
-			log.Printf("Added node: ID=%d", cc.NodeID)
+			// Extract node address from Context
+			if len(cc.Context) > 0 {
+				addr := string(cc.Context)
+				rn.peers[cc.NodeID] = addr
+				if rn.transport != nil {
+					rn.transport.AddPeer(cc.NodeID, addr)
+				}
+				log.Printf("Added node: ID=%d addr=%s", cc.NodeID, addr)
+			} else {
+				log.Printf("Added node: ID=%d (no address provided)", cc.NodeID)
+			}
 		case raftpb.ConfChangeRemoveNode:
-			// TODO: Remove peer from transport
+			delete(rn.peers, cc.NodeID)
+			if rn.transport != nil {
+				rn.transport.RemovePeer(cc.NodeID)
+			}
 			log.Printf("Removed node: ID=%d", cc.NodeID)
 		}
 	}
@@ -350,6 +424,62 @@ func (rn *RaftNode) nodeIDToRaftID(nodeID string) uint64 {
 		hash = hash*31 + uint64(c)
 	}
 	return hash
+}
+
+// Process implements the transport.MessageHandler interface
+// This is called by the transport when a message is received from a peer
+func (rn *RaftNode) Process(ctx context.Context, msg raftpb.Message) error {
+	return rn.node.Step(ctx, msg)
+}
+
+// ProposeAndWait proposes a new entry and waits for it to be committed
+func (rn *RaftNode) ProposeAndWait(ctx context.Context, data []byte) error {
+	// Check if we're the leader
+	if !rn.IsLeader() {
+		return fmt.Errorf("not the leader")
+	}
+
+	// Propose the entry
+	if err := rn.node.Propose(ctx, data); err != nil {
+		return fmt.Errorf("failed to propose: %w", err)
+	}
+
+	// Get the expected commit index
+	// This is a simplified approach - in production, we'd track the exact proposal
+	expectedIndex := rn.appliedIndex + 1
+
+	// Create wait channel
+	waitCh := make(chan error, 1)
+
+	rn.proposalsMu.Lock()
+	rn.proposals[expectedIndex] = waitCh
+	rn.proposalsMu.Unlock()
+
+	// Wait for commit or timeout
+	select {
+	case err := <-waitCh:
+		return err
+	case <-ctx.Done():
+		// Clean up on timeout
+		rn.proposalsMu.Lock()
+		delete(rn.proposals, expectedIndex)
+		rn.proposalsMu.Unlock()
+		return ctx.Err()
+	}
+}
+
+// notifyProposal notifies waiters that a proposal has been committed
+func (rn *RaftNode) notifyProposal(index uint64, err error) {
+	rn.proposalsMu.Lock()
+	defer rn.proposalsMu.Unlock()
+
+	if ch, exists := rn.proposals[index]; exists {
+		select {
+		case ch <- err:
+		default:
+		}
+		delete(rn.proposals, index)
+	}
 }
 
 // raftLogger implements raft.Logger
