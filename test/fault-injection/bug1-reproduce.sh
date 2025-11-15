@@ -72,4 +72,21 @@ done
 echo ""
 echo "=== Bug 1 Reproduction Complete ==="
 echo "Expected: Linearizability violation if kv-3 won election"
-echo "Next: Run Porcupine checker to verify violation"
+echo ""
+
+# Step 9: Run Porcupine linearizability check
+echo "Step 9: Running Porcupine linearizability check..."
+CHECKER_SCRIPT="$(dirname "$0")/../correctness/check-linearizability.sh"
+
+if [ -f "$CHECKER_SCRIPT" ]; then
+    if "$CHECKER_SCRIPT" "$CLUSTER_NAME"; then
+        echo ""
+        echo "⚠️  WARNING: No linearizability violation detected"
+        echo "   Bug may not have been triggered"
+    else
+        echo ""
+        echo "✓ Linearizability violation confirmed (as expected for Bug 1)"
+    fi
+else
+    echo "  (Porcupine checker not found at $CHECKER_SCRIPT)"
+fi
