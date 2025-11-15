@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raft-operator
+  namespace: default
+  labels:
+    app: raft-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: raft-operator
+  template:
+    metadata:
+      labels:
+        app: raft-operator
+    spec:
+      serviceAccountName: raft-operator
+      containers:
+        - name: operator
+          image: localhost:5000/raft-operator:latest
+          imagePullPolicy: Always
+          command:
+            - /raft-operator
+          args:
+            - --leader-elect
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi

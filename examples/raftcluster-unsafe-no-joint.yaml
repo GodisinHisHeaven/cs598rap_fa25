@@ -1,0 +1,15 @@
+apiVersion: storage.sys/v1
+kind: RaftCluster
+metadata:
+  name: bug2-demo
+spec:
+  replicas: 3
+  image: localhost:5000/raft-kv:latest
+  storageSize: 1Gi
+  snapshotInterval: "30s"
+  electionTimeoutMs: 300
+  safetyMode: unsafe-no-joint  # Bug 2: No Joint Consensus
+  reconfig:
+    rateLimit: "1/min"
+    maxParallel: 1
+    cooldownSeconds: 60

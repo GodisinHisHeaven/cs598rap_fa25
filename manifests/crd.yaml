@@ -1,0 +1,148 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: raftclusters.storage.sys
+spec:
+  group: storage.sys
+  names:
+    kind: RaftCluster
+    listKind: RaftClusterList
+    plural: raftclusters
+    singular: raftcluster
+    shortNames:
+      - rc
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - replicas
+                - image
+              properties:
+                replicas:
+                  type: integer
+                  minimum: 1
+                  maximum: 7
+                image:
+                  type: string
+                storageSize:
+                  type: string
+                  default: "1Gi"
+                snapshotInterval:
+                  type: string
+                  default: "30s"
+                electionTimeoutMs:
+                  type: integer
+                  default: 300
+                  minimum: 100
+                  maximum: 10000
+                safetyMode:
+                  type: string
+                  enum:
+                    - safe
+                    - unsafe-early-vote
+                    - unsafe-no-joint
+                  default: safe
+                reconfig:
+                  type: object
+                  properties:
+                    rateLimit:
+                      type: string
+                      default: "1/min"
+                    maxParallel:
+                      type: integer
+                      default: 1
+                      minimum: 1
+                      maximum: 1
+                    cooldownSeconds:
+                      type: integer
+                      default: 60
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Ready
+                    - Reconfiguring
+                    - Degraded
+                leader:
+                  type: string
+                members:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      nodeID:
+                        type: string
+                      role:
+                        type: string
+                        enum:
+                          - voter
+                          - learner
+                      caughtUp:
+                        type: boolean
+                      lastHeartbeat:
+                        type: string
+                        format: date-time
+                jointState:
+                  type: string
+                  enum:
+                    - none
+                    - entering
+                    - committed
+                    - leaving
+                lastReconfigAt:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                currentReconfigStep:
+                  type: string
+                  enum:
+                    - ""
+                    - AddLearner
+                    - CatchUp
+                    - EnterJoint
+                    - CommitNew
+                    - LeaveJoint
+                    - LeaderTransfer
+                configurationIndex:
+                  type: integer
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Replicas
+          type: integer
+          jsonPath: .spec.replicas
+        - name: Leader
+          type: string
+          jsonPath: .status.leader
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

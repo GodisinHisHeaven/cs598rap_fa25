@@ -1,0 +1,62 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+server/server
+server/raft-kv
+operator/operator
+operator/raft-operator
+
+# Kubernetes
+*.kubeconfig
+kubeconfig
+
+# Test data and logs
+*.log
+test-results/
+bench-results/
+wal/
+snapshots/
+data/
+tmp/
+
+# Porcupine verification output
+porcupine-*.json
+violations/
+
+# Docker
+docker-compose.override.yml
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride

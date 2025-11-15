@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package adminpb;
+
+option go_package = "github.com/cs598rap/raft-kubernetes/server/pkg/adminpb";
+
+import "google/protobuf/empty.proto";
+
+// AdminService provides administrative operations for Raft cluster management
+service AdminService {
+  // AddLearner adds a new node as a learner (non-voting member)
+  rpc AddLearner(AddLearnerRequest) returns (AddLearnerResponse);
+
+  // Promote promotes a learner to a full voting member
+  rpc Promote(PromoteRequest) returns (PromoteResponse);
+
+  // RemoveNode removes a node from the cluster
+  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
+
+  // CaughtUp checks if a learner has caught up with the leader
+  rpc CaughtUp(CaughtUpRequest) returns (CaughtUpResponse);
+
+  // TransferLeader transfers leadership to another node
+  rpc TransferLeader(TransferLeaderRequest) returns (TransferLeaderResponse);
+
+  // GetStatus returns the current cluster status
+  rpc GetStatus(google.protobuf.Empty) returns (StatusResponse);
+}
+
+message AddLearnerRequest {
+  string node_id = 1;
+  string address = 2;
+}
+
+message AddLearnerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message PromoteRequest {
+  string node_id = 1;
+}
+
+message PromoteResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RemoveNodeRequest {
+  string node_id = 1;
+}
+
+message RemoveNodeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CaughtUpRequest {
+  string node_id = 1;
+}
+
+message CaughtUpResponse {
+  bool caught_up = 1;
+  string message = 2;
+}
+
+message TransferLeaderRequest {
+  string target_node_id = 1;
+}
+
+message TransferLeaderResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message StatusResponse {
+  string leader = 1;
+  repeated Member members = 2;
+}
+
+message Member {
+  string node_id = 1;
+  string role = 2;  // "voter" or "learner"
+  bool caught_up = 3;
+}
