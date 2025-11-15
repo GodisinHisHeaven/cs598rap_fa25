@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -406,9 +407,10 @@ func (r *RaftClusterReconciler) reconfigureUnsafeNoJoint(ctx context.Context, cl
 }
 
 // parseQuantity parses a resource quantity string
-func parseQuantity(s string) corev1.ResourceList {
+func parseQuantity(s string) resource.Quantity {
 	// Simplified - in production use resource.MustParse
-	return corev1.ResourceList{}
+	q, _ := resource.ParseQuantity(s)
+	return q
 }
 
 // SetupWithManager sets up the controller with the Manager.

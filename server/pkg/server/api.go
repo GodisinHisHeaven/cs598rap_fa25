@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
@@ -141,17 +140,14 @@ func (a *APIServer) handlePut(w http.ResponseWriter, r *http.Request, key string
 		return
 	}
 
-	// Propose to Raft
+	// Propose to Raft and wait for commit
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := a.node.Propose(ctx, entryData); err != nil {
+	if err := a.node.ProposeAndWait(ctx, entryData); err != nil {
 		http.Error(w, fmt.Sprintf("proposal failed: %v", err), http.StatusInternalServerError)
 		return
 	}
-
-	// Wait for proposal to be committed (simplified - in production use proposal tracking)
-	time.Sleep(100 * time.Millisecond)
 
 	endTime := time.Now()
 
@@ -193,7 +189,7 @@ func (a *APIServer) handleDelete(w http.ResponseWriter, r *http.Request, key str
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := a.node.Propose(ctx, entryData); err != nil {
+	if err := a.node.ProposeAndWait(ctx, entryData); err != nil {
 		http.Error(w, fmt.Sprintf("proposal failed: %v", err), http.StatusInternalServerError)
 		return
 	}

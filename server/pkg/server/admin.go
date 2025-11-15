@@ -2,11 +2,9 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
-	"time"
 
 	"github.com/cs598rap/raft-kubernetes/server/pkg/raftnode"
 	"google.golang.org/grpc"
@@ -118,11 +116,26 @@ func (a *AdminServer) RemoveNode(ctx context.Context, req *pb.RemoveNodeRequest)
 
 // CaughtUp checks if a learner has caught up with the leader
 func (a *AdminServer) CaughtUp(ctx context.Context, req *pb.CaughtUpRequest) (*pb.CaughtUpResponse, error) {
-	// Simplified implementation - in production, track replication progress
-	// For now, return true after a delay to simulate catch-up
+	// Check if this node is the leader
+	if !a.node.IsLeader() {
+		return &pb.CaughtUpResponse{
+			CaughtUp: false,
+			Message:  "Not the leader",
+		}, nil
+	}
+
+	// Check replication progress
+	nodeID := a.nodeIDToRaftID(req.NodeId)
+	caughtUp := a.node.IsNodeCaughtUp(nodeID)
+
+	message := "Node is caught up"
+	if !caughtUp {
+		message = "Node is still catching up"
+	}
+
 	return &pb.CaughtUpResponse{
-		CaughtUp: true,
-		Message:  "Node is caught up",
+		CaughtUp: caughtUp,
+		Message:  message,
 	}, nil
 }
 
@@ -130,15 +143,25 @@ func (a *AdminServer) CaughtUp(ctx context.Context, req *pb.CaughtUpRequest) (*p
 func (a *AdminServer) TransferLeader(ctx context.Context, req *pb.TransferLeaderRequest) (*pb.TransferLeaderResponse, error) {
 	log.Printf("TransferLeader: target_node_id=%s", req.TargetNodeId)
 
+	// Check if this node is the leader
+	if !a.node.IsLeader() {
+		return &pb.TransferLeaderResponse{
+			Success: false,
+			Message: "Not the leader",
+		}, nil
+	}
+
 	// Use Raft's leadership transfer mechanism
 	targetID := a.nodeIDToRaftID(req.TargetNodeId)
 
-	// Note: etcd/raft supports leadership transfer via node.TransferLeadership()
-	// This is a placeholder - actual implementation would call that method
+	// Call the transfer leadership method
+	a.node.TransferLeadership(targetID)
 
+	// Leadership transfer is asynchronous, so we return success
+	// The caller should check if leadership actually transferred
 	return &pb.TransferLeaderResponse{
 		Success: true,
-		Message: fmt.Sprintf("Leadership transferred to %s", req.TargetNodeId),
+		Message: fmt.Sprintf("Leadership transfer initiated to %s", req.TargetNodeId),
 	}, nil
 }
 
