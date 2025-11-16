@@ -119,9 +119,213 @@ func (UnimplementedAdminServiceServer) GetStatus(context.Context, *emptypb.Empty
 
 func (UnimplementedAdminServiceServer) mustEmbedUnimplementedAdminServiceServer() {}
 
+// adminServiceClient implements AdminServiceClient
+type adminServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+// NewAdminServiceClient creates a new AdminServiceClient
+func NewAdminServiceClient(cc grpc.ClientConnInterface) AdminServiceClient {
+	return &adminServiceClient{cc: cc}
+}
+
+func (c *adminServiceClient) AddLearner(ctx context.Context, in *AddLearnerRequest, opts ...grpc.CallOption) (*AddLearnerResponse, error) {
+	out := new(AddLearnerResponse)
+	err := c.cc.Invoke(ctx, "/adminpb.AdminService/AddLearner", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) Promote(ctx context.Context, in *PromoteRequest, opts ...grpc.CallOption) (*PromoteResponse, error) {
+	out := new(PromoteResponse)
+	err := c.cc.Invoke(ctx, "/adminpb.AdminService/Promote", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) RemoveNode(ctx context.Context, in *RemoveNodeRequest, opts ...grpc.CallOption) (*RemoveNodeResponse, error) {
+	out := new(RemoveNodeResponse)
+	err := c.cc.Invoke(ctx, "/adminpb.AdminService/RemoveNode", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) CaughtUp(ctx context.Context, in *CaughtUpRequest, opts ...grpc.CallOption) (*CaughtUpResponse, error) {
+	out := new(CaughtUpResponse)
+	err := c.cc.Invoke(ctx, "/adminpb.AdminService/CaughtUp", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) TransferLeader(ctx context.Context, in *TransferLeaderRequest, opts ...grpc.CallOption) (*TransferLeaderResponse, error) {
+	out := new(TransferLeaderResponse)
+	err := c.cc.Invoke(ctx, "/adminpb.AdminService/TransferLeader", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *adminServiceClient) GetStatus(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*StatusResponse, error) {
+	out := new(StatusResponse)
+	err := c.cc.Invoke(ctx, "/adminpb.AdminService/GetStatus", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Service descriptor
+var AdminService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "adminpb.AdminService",
+	HandlerType: (*AdminServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "AddLearner",
+			Handler:    _AdminService_AddLearner_Handler,
+		},
+		{
+			MethodName: "Promote",
+			Handler:    _AdminService_Promote_Handler,
+		},
+		{
+			MethodName: "RemoveNode",
+			Handler:    _AdminService_RemoveNode_Handler,
+		},
+		{
+			MethodName: "CaughtUp",
+			Handler:    _AdminService_CaughtUp_Handler,
+		},
+		{
+			MethodName: "TransferLeader",
+			Handler:    _AdminService_TransferLeader_Handler,
+		},
+		{
+			MethodName: "GetStatus",
+			Handler:    _AdminService_GetStatus_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{},
+	Metadata: "admin.proto",
+}
+
+func _AdminService_AddLearner_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddLearnerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).AddLearner(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/adminpb.AdminService/AddLearner",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).AddLearner(ctx, req.(*AddLearnerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_Promote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PromoteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).Promote(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/adminpb.AdminService/Promote",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).Promote(ctx, req.(*PromoteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_RemoveNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveNodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).RemoveNode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/adminpb.AdminService/RemoveNode",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).RemoveNode(ctx, req.(*RemoveNodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_CaughtUp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CaughtUpRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).CaughtUp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/adminpb.AdminService/CaughtUp",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).CaughtUp(ctx, req.(*CaughtUpRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_TransferLeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TransferLeaderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).TransferLeader(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/adminpb.AdminService/TransferLeader",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).TransferLeader(ctx, req.(*TransferLeaderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AdminService_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).GetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/adminpb.AdminService/GetStatus",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).GetStatus(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RegisterAdminServiceServer registers the service
 func RegisterAdminServiceServer(s *grpc.Server, srv AdminServiceServer) {
-	// Simplified registration - actual implementation would register handlers
-	_ = s
-	_ = srv
+	s.RegisterService(&AdminService_ServiceDesc, srv)
 }
