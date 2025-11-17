@@ -40,7 +40,7 @@ Implements full Joint Consensus with 6-step workflow:
 
 ### Unsafe Baselines
 
-**unsafe-early-vote**: Bug 1 - Early-Vote Learner
+**unsafe-early-vote**: Bug 1 - Early-Vote Leader
 - Adds voter immediately without learner stage
 - Demonstrates Election Safety violation
 - Stale node can win election with incomplete log
