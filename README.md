@@ -31,7 +31,7 @@ StatefulSet (kv-0..kv-N-1)
 
 ### Safe Mode (Default)
 Implements full Joint Consensus with 6-step workflow:
-1. **AddLearner** - Create new pod as non-voting learner
+1. **AddLeader** - Create new pod as non-voting leader
 2. **CatchUp** - Stream log entries until durable
 3. **EnterJoint** - Commit joint configuration (Old ∪ New)
 4. **CommitNew** - Commit new configuration
@@ -40,8 +40,8 @@ Implements full Joint Consensus with 6-step workflow:
 
 ### Unsafe Baselines
 
-**unsafe-early-vote**: Bug 1 - Early-Vote Learner
-- Adds voter immediately without learner stage
+**unsafe-early-vote**: Bug 1 - Early-Vote Leader
+- Adds voter immediately without leader stage
 - Demonstrates Election Safety violation
 - Stale node can win election with incomplete log
 
@@ -160,7 +160,7 @@ make bug1
 # This will:
 # 1. Deploy cluster with unsafe-early-vote mode
 # 2. Write initial data
-# 3. Add new voter without learner stage
+# 3. Add new voter without leader stage
 # 4. Create network partition
 # 5. Verify linearizability violation with Porcupine
 ```
