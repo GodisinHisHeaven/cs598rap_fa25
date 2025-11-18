@@ -29,7 +29,7 @@ docker-build: ## Build Docker images
 	@echo "Building server Docker image..."
 	docker build -t $(SERVER_IMAGE):$(VERSION) -f server/Dockerfile server/
 	@echo "Building operator Docker image..."
-	docker build -t $(OPERATOR_IMAGE):$(VERSION) -f operator/Dockerfile operator/
+	docker build -t $(OPERATOR_IMAGE):$(VERSION) -f operator/Dockerfile.multi .
 	@echo "Docker images built successfully!"
 
 docker-push: docker-build ## Push Docker images to registry
