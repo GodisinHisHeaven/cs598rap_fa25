@@ -187,9 +187,12 @@ func (r *RaftClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
-							Name:  "raft-kv",
-							Image: cluster.Spec.Image,
+							Name:            "raft-kv",
+							Image:           cluster.Spec.Image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command: []string{"./raft-kv"},
 							Args: []string{
+								"-data-dir=/data",
 								"-raft-addr=:9000",
 								"-api-addr=:8080",
 								"-admin-addr=:9090",

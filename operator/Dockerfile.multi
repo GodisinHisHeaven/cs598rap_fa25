@@ -1,0 +1,35 @@
+# Multi-stage build for Raft Operator (with server dependency)
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /workspace
+
+# Copy go mod files for both operator and server
+COPY operator/go.mod operator/go.sum operator/
+COPY server/go.mod server/go.sum* server/
+
+# Download dependencies
+WORKDIR /workspace/operator
+RUN go mod download
+
+# Copy source code for both
+WORKDIR /workspace
+COPY operator/ operator/
+COPY server/pkg/adminpb/ server/pkg/adminpb/
+
+# Build operator binary
+WORKDIR /workspace/operator
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o raft-operator ./cmd/operator
+
+# Final stage
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+
+# Copy binary from builder
+COPY --from=builder /workspace/operator/raft-operator .
+
+USER 65532:65532
+
+ENTRYPOINT ["./raft-operator"]

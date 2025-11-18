@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o raft-kv ./cmd/ser
 # Final stage
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates curl iptables tc
+RUN apk --no-cache add ca-certificates curl iptables iproute2
 
 WORKDIR /root/
 

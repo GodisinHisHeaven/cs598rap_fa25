@@ -19,9 +19,9 @@ spec:
       containers:
         - name: operator
           image: localhost:5000/raft-operator:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command:
-            - /raft-operator
+            - ./raft-operator
           args:
             - --leader-elect
           ports:
