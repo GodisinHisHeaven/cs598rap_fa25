@@ -308,7 +308,7 @@ The project uses **Porcupine** for linearizability checking:
 
 ## Design Document
 
-For detailed design rationale, see [CS598RAP_Design_Doc.pdf](./CS598RAP_Design_Doc.pdf)
+For detailed design rationale, see [CS598RAP_Design_Doc.pdf](docs/CS598RAP_Design_Doc.pdf)
 
 ## Cleanup
 
