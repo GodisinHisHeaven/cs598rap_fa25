@@ -3,6 +3,7 @@
 # This script demonstrates what happens when a new node can vote before catching up
 
 set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 CLUSTER_NAME="bug1-demo"
 
@@ -36,7 +37,7 @@ echo "Step 4: Creating network partition..."
 echo "  Group A (old, with data): ${CLUSTER_NAME}-0, ${CLUSTER_NAME}-1"
 echo "  Group B (includes new node): ${CLUSTER_NAME}-2, ${CLUSTER_NAME}-3"
 
-./partition.sh "${CLUSTER_NAME}-0,${CLUSTER_NAME}-1" "${CLUSTER_NAME}-2,${CLUSTER_NAME}-3"
+"$SCRIPT_DIR/partition.sh" "${CLUSTER_NAME}-0,${CLUSTER_NAME}-1" "${CLUSTER_NAME}-2,${CLUSTER_NAME}-3"
 sleep 5
 
 # Step 5: The new node (kv-3) might win election with stale log
@@ -56,7 +57,7 @@ sleep 2
 # Step 7: Heal partition
 echo ""
 echo "Step 7: Healing partition..."
-./heal.sh "$CLUSTER_NAME"
+"$SCRIPT_DIR/heal.sh" "$CLUSTER_NAME"
 sleep 5
 
 # Step 8: Check for inconsistency
