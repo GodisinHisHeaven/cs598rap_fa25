@@ -3,6 +3,7 @@
 # This script demonstrates split-brain when joint consensus is skipped
 
 set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 CLUSTER_NAME="bug2-demo"
 
@@ -38,7 +39,7 @@ echo "  Group B (new config): ${CLUSTER_NAME}-1, ${CLUSTER_NAME}-3, ${CLUSTER_NA
 echo "  Note: ${CLUSTER_NAME}-1 is in both groups (the overlap)"
 
 # Partition: 0,2 vs 3,4 (leaving 1 as the bridge that we'll partition selectively)
-./partition.sh "${CLUSTER_NAME}-0,${CLUSTER_NAME}-2" "${CLUSTER_NAME}-3,${CLUSTER_NAME}-4"
+"$SCRIPT_DIR/partition.sh" "${CLUSTER_NAME}-0,${CLUSTER_NAME}-2" "${CLUSTER_NAME}-3,${CLUSTER_NAME}-4"
 sleep 5
 
 # Step 5: Both groups can form quorums without joint consensus
@@ -65,7 +66,7 @@ sleep 2
 # Step 7: Heal partition
 echo ""
 echo "Step 7: Healing partition..."
-./heal.sh "$CLUSTER_NAME"
+"$SCRIPT_DIR/heal.sh" "$CLUSTER_NAME"
 sleep 5
 
 # Step 8: Check for split-brain

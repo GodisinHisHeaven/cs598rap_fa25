@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/time/rate"
 )
 
 type Config struct {
@@ -137,7 +136,7 @@ func main() {
 
 	// Start workers
 	var wg sync.WaitGroup
-	limiter := rate.NewLimiter(rate.Limit(config.QPS), config.QPS)
+	limiter := startRateLimiter(ctx, config.QPS)
 
 	for i := 0; i < config.Workers; i++ {
 		wg.Add(1)
@@ -192,7 +191,42 @@ func parseFlags() *Config {
 	}
 }
 
-func worker(ctx context.Context, wg *sync.WaitGroup, id int, config *Config, stats *Stats, limiter *rate.Limiter) {
+func startRateLimiter(ctx context.Context, qps int) <-chan struct{} {
+	if qps <= 0 {
+		return nil
+	}
+
+	interval := time.Second / time.Duration(qps)
+	if interval <= 0 {
+		interval = time.Microsecond
+	}
+
+	tokens := make(chan struct{}, qps)
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer func() {
+			ticker.Stop()
+			close(tokens)
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				select {
+				case tokens <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
+	return tokens
+}
+
+func worker(ctx context.Context, wg *sync.WaitGroup, id int, config *Config, stats *Stats, limiter <-chan struct{}) {
 	defer wg.Done()
 
 	client := &http.Client{
@@ -207,8 +241,15 @@ func worker(ctx context.Context, wg *sync.WaitGroup, id int, config *Config, sta
 		}
 
 		// Rate limit
-		if err := limiter.Wait(ctx); err != nil {
-			return
+		if limiter != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-limiter:
+				if !ok {
+					return
+				}
+			}
 		}
 
 		// Decide operation type

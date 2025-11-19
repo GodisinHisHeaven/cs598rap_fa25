@@ -159,13 +159,15 @@ func (r *RaftClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 			return err
 		}
 
-		// Build initial peers list
+		// Build initial peers list in nodeID=addr format
 		peers := ""
 		for i := int32(0); i < cluster.Spec.Replicas; i++ {
 			if i > 0 {
 				peers += ","
 			}
-			peers += fmt.Sprintf("%s-%d.%s-raft:9000", cluster.Name, i, cluster.Name)
+			nodeID := fmt.Sprintf("%s-%d", cluster.Name, i)
+			addr := fmt.Sprintf("%s-%d.%s-raft:9000", cluster.Name, i, cluster.Name)
+			peers += fmt.Sprintf("%s=%s", nodeID, addr)
 		}
 
 		sts.Spec = appsv1.StatefulSetSpec{
@@ -190,8 +192,9 @@ func (r *RaftClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 							Name:            "raft-kv",
 							Image:           cluster.Spec.Image,
 							ImagePullPolicy: corev1.PullIfNotPresent,
-							Command: []string{"./raft-kv"},
+							Command:         []string{"./raft-kv"},
 							Args: []string{
+								"-id=$(POD_NAME)",
 								"-data-dir=/data",
 								"-raft-addr=:9000",
 								"-api-addr=:8080",
@@ -199,6 +202,16 @@ func (r *RaftClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 								"-peers=" + peers,
 								fmt.Sprintf("-safety-mode=%s", cluster.Spec.SafetyMode),
 								fmt.Sprintf("-election-timeout=%d", cluster.Spec.ElectionTimeoutMs),
+							},
+							Env: []corev1.EnvVar{
+								{
+									Name: "POD_NAME",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.name",
+										},
+									},
+								},
 							},
 							Ports: []corev1.ContainerPort{
 								{Name: "raft", ContainerPort: 9000},
