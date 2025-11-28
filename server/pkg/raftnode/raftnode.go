@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -40,13 +41,15 @@ type RaftNode struct {
 	store     *kvstore.KVStore
 	wal       *storage.WAL
 	snap      *storage.Snapshotter
+	storage   *raft.MemoryStorage // Raft storage backend
 	transport *transport.Transport
 	mu        sync.RWMutex
 	stopped   bool
 
 	// Raft state
-	appliedIndex  uint64
-	snapshotIndex uint64
+	appliedIndex     uint64
+	snapshotIndex    uint64
+	snapshotInterval uint64
 
 	// Proposal channels
 	proposeC    chan string
@@ -103,6 +106,27 @@ func NewRaftNode(cfg *config.Config, store *kvstore.KVStore) (*RaftNode, error) 
 // Start starts the Raft node
 func (rn *RaftNode) Start() error {
 	// Load existing snapshot if any
+	// ---------------------------------------
+	intervalStr := rn.cfg.SnapshotInterval // e.g. "30s" / "10000" / "5m"
+
+	var snapshotInterval uint64
+
+	// Try parse as duration ("30s", "1m", "500ms")
+	if d, err := time.ParseDuration(intervalStr); err == nil {
+		snapshotInterval = uint64(d / time.Millisecond) // convert to ms
+		log.Printf("Parsed snapshotInterval='%s' as duration %d ms", intervalStr, snapshotInterval)
+	} else {
+		// Try parse as raw integer ("10000")
+		if n, err2 := strconv.Atoi(intervalStr); err2 == nil {
+			snapshotInterval = uint64(n)
+			log.Printf("Parsed snapshotInterval='%s' as integer %d", intervalStr, snapshotInterval)
+		} else {
+			return fmt.Errorf("invalid snapshotInterval value '%s'", intervalStr)
+		}
+	}
+
+	rn.snapshotInterval = snapshotInterval
+
 	snapshot, err := rn.snap.Load()
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to load snapshot: %w", err)
@@ -114,12 +138,42 @@ func (rn *RaftNode) Start() error {
 		return fmt.Errorf("failed to read WAL: %w", err)
 	}
 
-	// Create Raft configuration
+	// Create and initialize Storage BEFORE starting Raft node
+	rn.storage = raft.NewMemoryStorage()
+
+	// Restore snapshot to Storage if exists
+	if snapshot != nil {
+		if err := rn.storage.ApplySnapshot(*snapshot); err != nil {
+			return fmt.Errorf("failed to apply snapshot to storage: %w", err)
+		}
+		// Also restore to KV store
+		if err := rn.store.Restore(snapshot.Data); err != nil {
+			return fmt.Errorf("failed to restore snapshot to KV store: %w", err)
+		}
+		rn.snapshotIndex = snapshot.Metadata.Index
+		rn.appliedIndex = snapshot.Metadata.Index
+	}
+
+	// Restore HardState to Storage if exists
+	if !raft.IsEmptyHardState(hardState) {
+		if err := rn.storage.SetHardState(hardState); err != nil {
+			return fmt.Errorf("failed to set hard state: %w", err)
+		}
+	}
+
+	// Restore WAL entries to Storage if exists
+	if len(entries) > 0 {
+		if err := rn.storage.Append(entries); err != nil {
+			return fmt.Errorf("failed to append entries to storage: %w", err)
+		}
+	}
+
+	// Create Raft configuration with initialized Storage
 	c := &raft.Config{
 		ID:              rn.nodeIDToRaftID(rn.cfg.NodeID),
 		ElectionTick:    10,
 		HeartbeatTick:   1,
-		Storage:         raft.NewMemoryStorage(),
+		Storage:         rn.storage,
 		MaxSizePerMsg:   1024 * 1024,
 		MaxInflightMsgs: 256,
 		Logger:          &raftLogger{},
@@ -128,7 +182,7 @@ func (rn *RaftNode) Start() error {
 	// Get initial peers
 	var peers []raft.Peer
 	if len(entries) == 0 && snapshot == nil {
-		// New cluster
+		// New cluster - start fresh
 		peerMap := rn.cfg.GetPeers()
 		for nodeID := range peerMap {
 			raftID := rn.nodeIDToRaftID(nodeID)
@@ -136,22 +190,8 @@ func (rn *RaftNode) Start() error {
 		}
 		rn.node = raft.StartNode(c, peers)
 	} else {
-		// Restart existing node
+		// Restart existing node with restored state
 		rn.node = raft.RestartNode(c)
-	}
-
-	// Restore snapshot if exists
-	if snapshot != nil {
-		if err := rn.store.Restore(snapshot.Data); err != nil {
-			return fmt.Errorf("failed to restore snapshot: %w", err)
-		}
-		rn.snapshotIndex = snapshot.Metadata.Index
-		rn.appliedIndex = snapshot.Metadata.Index
-	}
-
-	// Apply WAL entries
-	if err := rn.replayWAL(hardState, entries); err != nil {
-		return fmt.Errorf("failed to replay WAL: %w", err)
 	}
 
 	// Initialize transport
@@ -264,33 +304,57 @@ func (rn *RaftNode) run() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
+	log.Printf("[DEBUG] run() loop started for node %s", rn.cfg.NodeID)
+	tickCount := 0
+
 	for {
 		select {
 		case <-ticker.C:
+			tickCount++
+			if tickCount%10 == 0 {
+				log.Printf("[DEBUG] Tick %d for node %s", tickCount, rn.cfg.NodeID)
+			}
 			rn.node.Tick()
 
 		case rd := <-rn.node.Ready():
+			log.Printf("[DEBUG] Ready message received: HardState=%+v, Entries=%d, CommittedEntries=%d, Messages=%d, SoftState=%+v",
+				rd.HardState, len(rd.Entries), len(rd.CommittedEntries), len(rd.Messages), rd.SoftState)
 			// Save to WAL
 			if err := rn.wal.Save(rd.HardState, rd.Entries); err != nil {
 				log.Printf("Failed to save WAL: %v", err)
 			}
 
+			// CRITICAL: Append entries to Storage (needed for Raft to access them later)
+			if len(rd.Entries) > 0 {
+				if err := rn.storage.Append(rd.Entries); err != nil {
+					log.Printf("Failed to append entries to storage: %v", err)
+				}
+				log.Printf("[DEBUG] Appended %d entries to storage", len(rd.Entries))
+			}
+
 			// Send messages to peers
 			if rn.transport != nil && len(rd.Messages) > 0 {
 				rn.transport.SendMessages(rd.Messages)
+				log.Printf("[DEBUG] Sent %d messages to peers", len(rd.Messages))
 			}
 
 			// Apply snapshot
 			if !raft.IsEmptySnap(rd.Snapshot) {
+				if err := rn.storage.ApplySnapshot(rd.Snapshot); err != nil {
+					log.Printf("Failed to apply snapshot to storage: %v", err)
+				}
 				if err := rn.store.Restore(rd.Snapshot.Data); err != nil {
-					log.Printf("Failed to restore snapshot: %v", err)
+					log.Printf("Failed to restore snapshot to KV store: %v", err)
 				}
 				rn.snapshotIndex = rd.Snapshot.Metadata.Index
 				rn.appliedIndex = rd.Snapshot.Metadata.Index
+				log.Printf("[DEBUG] Applied snapshot at index %d", rn.snapshotIndex)
 			}
 
 			// Apply committed entries
-			for _, entry := range rd.CommittedEntries {
+			log.Printf("[DEBUG] Applying %d committed entries", len(rd.CommittedEntries))
+			for i, entry := range rd.CommittedEntries {
+				log.Printf("[DEBUG]   Entry %d: Index=%d, Term=%d, Type=%v", i, entry.Index, entry.Term, entry.Type)
 				if err := rn.applyEntry(entry); err != nil {
 					log.Printf("Failed to apply entry: %v", err)
 				}
@@ -299,9 +363,10 @@ func (rn *RaftNode) run() {
 				// Notify proposal waiters
 				rn.notifyProposal(entry.Index, nil)
 			}
+			log.Printf("[DEBUG] Applied index now: %d", rn.appliedIndex)
 
 			// Check if we need to create a snapshot
-			if rn.appliedIndex-rn.snapshotIndex >= uint64(rn.cfg.SnapshotInterval) {
+			if rn.appliedIndex-rn.snapshotIndex >= rn.snapshotInterval  {
 				if err := rn.createSnapshot(); err != nil {
 					log.Printf("Failed to create snapshot: %v", err)
 				}
@@ -310,11 +375,21 @@ func (rn *RaftNode) run() {
 			// Update leader status
 			if rd.SoftState != nil {
 				rn.mu.Lock()
+				oldIsLeader := rn.isLeader
 				rn.isLeader = rd.SoftState.RaftState == raft.StateLeader
+				if oldIsLeader != rn.isLeader {
+					if rn.isLeader {
+						log.Printf("[DEBUG] Node %s became LEADER", rn.cfg.NodeID)
+					} else {
+						log.Printf("[DEBUG] Node %s is no longer leader (state=%v)", rn.cfg.NodeID, rd.SoftState.RaftState)
+					}
+				}
 				rn.mu.Unlock()
 			}
 
+			log.Printf("[DEBUG] Calling Advance()")
 			rn.node.Advance()
+			log.Printf("[DEBUG] Advance() returned, ready for next event")
 		}
 
 		rn.mu.RLock()

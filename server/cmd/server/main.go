@@ -23,10 +23,10 @@ func main() {
 		apiAddr           = flag.String("api-addr", ":8080", "API server address")
 		adminAddr         = flag.String("admin-addr", ":9090", "Admin RPC address")
 		dataDir           = flag.String("data-dir", "./data", "Data directory for WAL and snapshots")
-		initialPeers      = flag.String("peers", "", "Comma-separated list of initial peers (e.g., kv-0:9000,kv-1:9000)")
+		initialPeers      = flag.String("peers", "", "Comma-separated list of initial peers (nodeID=addr, e.g., kv-0=kv-0:9000)")
 		safetyMode        = flag.String("safety-mode", "safe", "Safety mode: safe, unsafe-early-vote, unsafe-no-joint")
-		snapshotInterval  = flag.Int("snapshot-interval", 10000, "Snapshot after this many log entries")
-		electionTimeoutMs = flag.Int("election-timeout", 300, "Election timeout in milliseconds")
+		snapshotInterval  = flag.String("snapshot-interval", "10000", "Snapshot interval (duration string or integer ms)")
+		electionTimeoutMs = flag.Int("election-timeout", 300, "Election timeout in ms")
 	)
 	flag.Parse()
 

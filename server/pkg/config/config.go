@@ -11,7 +11,7 @@ type Config struct {
 	DataDir           string
 	InitialPeers      string
 	SafetyMode        string
-	SnapshotInterval  int
+	SnapshotInterval  string `json:"snapshotInterval"`
 	ElectionTimeoutMs int
 }
 
@@ -28,16 +28,39 @@ func (c *Config) GetPeers() map[string]string {
 			continue
 		}
 
-		parts := strings.Split(peer, ":")
-		if len(parts) >= 2 {
-			// Extract node ID from address (e.g., "kv-0:9000" -> "kv-0")
-			nodeID := parts[0]
-			addr := peer
-			peers[nodeID] = addr
+		nodeID, addr := parsePeerEntry(peer)
+		if nodeID == "" || addr == "" {
+			continue
 		}
+		peers[nodeID] = addr
 	}
 
 	return peers
+}
+
+// parsePeerEntry parses either nodeID=addr or addr-only peer declarations.
+func parsePeerEntry(entry string) (nodeID string, addr string) {
+	// Preferred format: nodeID=addr
+	if strings.Contains(entry, "=") {
+		parts := strings.SplitN(entry, "=", 2)
+		nodeID = strings.TrimSpace(parts[0])
+		addr = strings.TrimSpace(parts[1])
+		return
+	}
+
+	// Backward compatible format: addr only, derive nodeID from host segment
+	addr = entry
+	host := entry
+
+	if colon := strings.Index(host, ":"); colon != -1 {
+		host = host[:colon]
+	}
+	if dot := strings.Index(host, "."); dot != -1 {
+		host = host[:dot]
+	}
+
+	nodeID = strings.TrimSpace(host)
+	return
 }
 
 // IsSafeMode returns true if running in safe mode
