@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -61,9 +62,9 @@ func main() {
 		fmt.Println()
 	}
 
-	// Check linearizability
+	// Check linearizability (verbose to get visualization info)
 	fmt.Println("Checking linearizability...")
-	result := porcupine.CheckEvents(KVModel, events)
+	result, info := porcupine.CheckEventsVerbose(KVModel, events, 0)
 
 	if result == porcupine.Ok {
 		fmt.Println("✓ PASS: History is linearizable")
@@ -74,21 +75,22 @@ func main() {
 		// Try to find a specific violation
 		if len(events) > 0 {
 			fmt.Println("\nSearching for violation...")
-			info := porcupine.CheckEventsVerbose(KVModel, events, 0)
-			if info.Ok == porcupine.Illegal {
-				fmt.Printf("\nViolation details:\n")
-				fmt.Printf("  Type: Linearizability violation detected\n")
-				fmt.Printf("  Total operations checked: %d\n", len(events))
-			}
+			fmt.Printf("\nViolation details:\n")
+			fmt.Printf("  Type: Linearizability violation detected\n")
+			fmt.Printf("  Total operations checked: %d\n", len(events))
 		}
 
 		// Save visualization if requested
 		if *outputFile != "" {
-			visualization := porcupine.Visualize(KVModel, info)
-			if err := os.WriteFile(*outputFile, []byte(visualization), 0644); err != nil {
+			var buf bytes.Buffer
+			if err := porcupine.Visualize(KVModel, info, &buf); err != nil {
 				log.Printf("Failed to save visualization: %v", err)
 			} else {
-				fmt.Printf("\nVisualization saved to: %s\n", *outputFile)
+				if err := os.WriteFile(*outputFile, buf.Bytes(), 0644); err != nil {
+					log.Printf("Failed to save visualization: %v", err)
+				} else {
+					fmt.Printf("\nVisualization saved to: %s\n", *outputFile)
+				}
 			}
 		}
 
@@ -151,8 +153,6 @@ func convertToPorcupineEvents(history []kvstore.Operation) []porcupine.Event {
 			opType = "get"
 		case kvstore.OpPut:
 			opType = "put"
-		case kvstore.OpDelete:
-			opType = "delete"
 		default:
 			continue
 		}

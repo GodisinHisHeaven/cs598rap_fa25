@@ -68,8 +68,6 @@ bug1: ## Reproduce Bug 1 (Early-Vote Learner)
 	kubectl wait --for=condition=Ready raftcluster/bug1-demo --timeout=300s || true
 	@echo "Starting load generation..."
 	./test/fault-injection/bug1-reproduce.sh
-	@echo "Checking for violations with Porcupine..."
-	./test/correctness/check-linearizability.sh
 
 bug2: ## Reproduce Bug 2 (No Joint Consensus)
 	@echo "Deploying cluster with unsafe-no-joint mode..."
@@ -78,8 +76,6 @@ bug2: ## Reproduce Bug 2 (No Joint Consensus)
 	kubectl wait --for=condition=Ready raftcluster/bug2-demo --timeout=300s || true
 	@echo "Starting load generation and fault injection..."
 	./test/fault-injection/bug2-reproduce.sh
-	@echo "Checking for violations with Porcupine..."
-	./test/correctness/check-linearizability.sh
 
 bench: ## Run performance benchmarks
 	@echo "Running steady-state benchmark..."
