@@ -32,7 +32,7 @@ else
     # Collect from Kubernetes pods
     echo "Step 1: Collecting operation history from all nodes..."
 
-    PODS=$(kubectl get pods -l app=raft-kv -o jsonpath='{.items[*].metadata.name}')
+    PODS=$(kubectl get pods -l app=raft-kv,cluster="$CLUSTER_NAME" -o jsonpath='{.items[*].metadata.name}')
 
     for pod in $PODS; do
         echo "  Fetching history from $pod..."
