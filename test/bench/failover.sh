@@ -20,10 +20,46 @@ fi
 
 mkdir -p bench-results
 
-# Get a node to send requests to
-POD=$(kubectl get pods -l app=raft-kv -o jsonpath='{.items[0].metadata.name}')
-echo "Port-forwarding to $POD..."
-kubectl port-forward "$POD" 8080:8080 &
+# Find current leader
+echo ""
+echo "Detecting current leader..."
+LEADER=$(kubectl get raftcluster "$CLUSTER_NAME" -o jsonpath='{.status.leader}' 2>/dev/null || echo "")
+
+if [ -z "$LEADER" ]; then
+    # Try to detect leader from pods
+    for pod in $(kubectl get pods -l app=raft-kv -o jsonpath='{.items[*].metadata.name}'); do
+        LEADER_CHECK=$(kubectl exec "$pod" -- curl -s http://localhost:8080/health 2>/dev/null | grep -o '"is_leader":true' || true)
+        if [ -n "$LEADER_CHECK" ]; then
+            LEADER="$pod"
+            break
+        fi
+    done
+fi
+
+if [ -z "$LEADER" ]; then
+    echo "❌ Could not detect leader"
+    kill $LOAD_PID 2>/dev/null || true
+    exit 1
+fi
+
+echo "Current leader: $LEADER"
+
+# Choose a non-leader pod for port-forward to avoid losing the tunnel when we delete the leader.
+FOLLOWER=""
+for pod in $(kubectl get pods -l app=raft-kv -o jsonpath='{.items[*].metadata.name}'); do
+    if [ "$pod" != "$LEADER" ]; then
+        FOLLOWER="$pod"
+        break
+    fi
+done
+
+if [ -z "$FOLLOWER" ]; then
+    echo "❌ Could not find a follower pod for port-forwarding"
+    exit 1
+fi
+
+echo "Port-forwarding via follower pod: $FOLLOWER"
+kubectl port-forward "pod/${FOLLOWER}" 8080:8080 >/tmp/failover-portforward.log 2>&1 &
 PF_PID=$!
 sleep 2
 
@@ -51,30 +87,6 @@ LOAD_PID=$!
 echo "Waiting for load to stabilize (10s)..."
 sleep 10
 
-# Find current leader
-echo ""
-echo "Detecting current leader..."
-LEADER=$(kubectl get raftcluster "$CLUSTER_NAME" -o jsonpath='{.status.leader}' 2>/dev/null || echo "")
-
-if [ -z "$LEADER" ]; then
-    # Try to detect leader from pods
-    for pod in $(kubectl get pods -l app=raft-kv -o jsonpath='{.items[*].metadata.name}'); do
-        LEADER_CHECK=$(kubectl exec "$pod" -- curl -s http://localhost:8080/health 2>/dev/null | grep -o '"is_leader":true' || true)
-        if [ -n "$LEADER_CHECK" ]; then
-            LEADER="$pod"
-            break
-        fi
-    done
-fi
-
-if [ -z "$LEADER" ]; then
-    echo "❌ Could not detect leader"
-    kill $LOAD_PID 2>/dev/null || true
-    exit 1
-fi
-
-echo "Current leader: $LEADER"
-
 # Kill the leader and measure failover time
 echo ""
 echo "Killing leader pod: $LEADER"
@@ -95,6 +107,19 @@ while [ $WAITED -lt $MAX_WAIT ]; do
 
     # Check if cluster has a new leader
     NEW_LEADER=$(kubectl get raftcluster "$CLUSTER_NAME" -o jsonpath='{.status.leader}' 2>/dev/null || echo "")
+
+    if [ -z "$NEW_LEADER" ]; then
+        # Fallback: probe pods directly
+        for pod in $(kubectl get pods -l app=raft-kv -o jsonpath='{.items[*].metadata.name}'); do
+            if [ "$pod" = "$LEADER" ]; then
+                continue
+            fi
+            if kubectl exec "$pod" -- curl -s http://localhost:8080/health 2>/dev/null | grep -q '"is_leader":true'; then
+                NEW_LEADER="$pod"
+                break
+            fi
+        done
+    fi
 
     if [ -n "$NEW_LEADER" ] && [ "$NEW_LEADER" != "$LEADER" ]; then
         RECOVERY_TIME=$(date +%s%N)

@@ -16,20 +16,20 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-
 )
 
 type Config struct {
-	URLs            []string
-	QPS             int
-	Duration        time.Duration
-	KeySpace        int
-	ValueSize       int
-	ReadRatio       float64
-	Workers         int
-	Timeout         time.Duration
-	ReportInterval  time.Duration
-	OutputFile      string
+	URLs           []string
+	QPS            int
+	Duration       time.Duration
+	KeySpace       int
+	ValueSize      int
+	ReadRatio      float64
+	Workers        int
+	Timeout        time.Duration
+	ReportInterval time.Duration
+	OutputFile     string
+	StdoutJSON     bool
 }
 
 type Result struct {
@@ -41,14 +41,27 @@ type Result struct {
 }
 
 type Stats struct {
-	TotalOps       int64
-	SuccessfulOps  int64
-	FailedOps      int64
-	TotalLatency   int64
-	MinLatency     int64
-	MaxLatency     int64
-	Latencies      []int64
-	mu             sync.Mutex
+	TotalOps      int64
+	SuccessfulOps int64
+	FailedOps     int64
+	TotalLatency  int64
+	MinLatency    int64
+	MaxLatency    int64
+	Latencies     []int64
+	ErrorCounts   map[string]int64
+	Samples       []Sample
+	mu            sync.Mutex
+}
+
+type Sample struct {
+	TotalOps int64   `json:"total_ops"`
+	Success  int64   `json:"success_ops"`
+	Failure  int64   `json:"failed_ops"`
+	QPS      float64 `json:"qps"`
+	Time     int64   `json:"timestamp_ns"`
+	DeltaOps int64   `json:"delta_ops"`
+	DeltaSuc int64   `json:"delta_success"`
+	DeltaErr int64   `json:"delta_failed"`
 }
 
 func (s *Stats) Record(r Result) {
@@ -63,6 +76,12 @@ func (s *Stats) Record(r Result) {
 		atomic.AddInt64(&s.SuccessfulOps, 1)
 	} else {
 		atomic.AddInt64(&s.FailedOps, 1)
+		if r.Error != "" {
+			if s.ErrorCounts == nil {
+				s.ErrorCounts = make(map[string]int64)
+			}
+			s.ErrorCounts[r.Error]++
+		}
 	}
 
 	s.Latencies = append(s.Latencies, latencyNs)
@@ -119,6 +138,7 @@ func main() {
 
 	stats := &Stats{
 		Latencies: make([]int64, 0, 100000),
+		Samples:   make([]Sample, 0, 1000),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), config.Duration)
@@ -171,6 +191,7 @@ func parseFlags() *Config {
 	timeout := flag.Duration("timeout", 5*time.Second, "Request timeout")
 	reportInterval := flag.Duration("report-interval", 5*time.Second, "Progress report interval")
 	outputFile := flag.String("output", "", "Output file for results (JSON)")
+	stdoutJSON := flag.Bool("stdout-json", false, "Also emit JSON results to stdout")
 
 	flag.Parse()
 
@@ -188,6 +209,7 @@ func parseFlags() *Config {
 		Timeout:        *timeout,
 		ReportInterval: *reportInterval,
 		OutputFile:     *outputFile,
+		StdoutJSON:     *stdoutJSON,
 	}
 }
 
@@ -271,7 +293,23 @@ func doGet(client *http.Client, config *Config) Result {
 	url := selectURL(config.URLs) + "/kv/" + key
 
 	start := time.Now()
-	resp, err := client.Get(url)
+	var resp *http.Response
+	var err error
+
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err = client.Get(url)
+		if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound) {
+			break
+		}
+		if err == nil {
+			resp.Body.Close()
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(25*(attempt+1)) * time.Millisecond)
+			continue
+		}
+		break
+	}
 	latency := time.Since(start)
 
 	result := Result{
@@ -280,7 +318,7 @@ func doGet(client *http.Client, config *Config) Result {
 		Timestamp: start,
 	}
 
-	if err != nil {
+	if err != nil || resp == nil {
 		result.Success = false
 		result.Error = err.Error()
 		return result
@@ -289,6 +327,9 @@ func doGet(client *http.Client, config *Config) Result {
 
 	io.ReadAll(resp.Body) // Consume body
 	result.Success = resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound
+	if !result.Success {
+		result.Error = fmt.Sprintf("status_%d", resp.StatusCode)
+	}
 
 	return result
 }
@@ -302,7 +343,28 @@ func doPut(client *http.Client, config *Config) Result {
 	bodyBytes, _ := json.Marshal(body)
 
 	start := time.Now()
-	resp, err := client.Post(url, "application/json", bytes.NewReader(bodyBytes))
+	var resp *http.Response
+	var err error
+
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err = client.Post(url, "application/json", bytes.NewReader(bodyBytes))
+		if err == nil && resp.StatusCode == http.StatusOK {
+			break
+		}
+		if err == nil {
+			resp.Body.Close()
+		}
+		// Retry on leader changes / transient errors
+		if attempt < 2 && (err != nil ||
+			resp.StatusCode == http.StatusServiceUnavailable ||
+			resp.StatusCode == http.StatusInternalServerError ||
+			resp.StatusCode == http.StatusBadGateway ||
+			resp.StatusCode == http.StatusGatewayTimeout) {
+			time.Sleep(time.Duration(25*(attempt+1)) * time.Millisecond)
+			continue
+		}
+		break
+	}
 	latency := time.Since(start)
 
 	result := Result{
@@ -311,7 +373,7 @@ func doPut(client *http.Client, config *Config) Result {
 		Timestamp: start,
 	}
 
-	if err != nil {
+	if err != nil || resp == nil {
 		result.Success = false
 		result.Error = err.Error()
 		return result
@@ -320,6 +382,9 @@ func doPut(client *http.Client, config *Config) Result {
 
 	io.ReadAll(resp.Body) // Consume body
 	result.Success = resp.StatusCode == http.StatusOK
+	if !result.Success {
+		result.Error = fmt.Sprintf("status_%d", resp.StatusCode)
+	}
 
 	return result
 }
@@ -345,6 +410,8 @@ func progressReporter(ctx context.Context, stats *Stats, interval time.Duration)
 	defer ticker.Stop()
 
 	lastOps := int64(0)
+	lastSuccess := int64(0)
+	lastFail := int64(0)
 	lastTime := time.Now()
 
 	for {
@@ -354,6 +421,8 @@ func progressReporter(ctx context.Context, stats *Stats, interval time.Duration)
 		case <-ticker.C:
 			now := time.Now()
 			currentOps := atomic.LoadInt64(&stats.TotalOps)
+			currentSuc := atomic.LoadInt64(&stats.SuccessfulOps)
+			currentFail := atomic.LoadInt64(&stats.FailedOps)
 			elapsed := now.Sub(lastTime).Seconds()
 			currentQPS := float64(currentOps-lastOps) / elapsed
 
@@ -362,7 +431,22 @@ func progressReporter(ctx context.Context, stats *Stats, interval time.Duration)
 				atomic.LoadInt64(&stats.SuccessfulOps),
 				atomic.LoadInt64(&stats.FailedOps))
 
+			stats.mu.Lock()
+			stats.Samples = append(stats.Samples, Sample{
+				TotalOps: currentOps,
+				Success:  currentSuc,
+				Failure:  currentFail,
+				QPS:      currentQPS,
+				Time:     now.UnixNano(),
+				DeltaOps: currentOps - lastOps,
+				DeltaSuc: currentSuc - lastSuccess,
+				DeltaErr: currentFail - lastFail,
+			})
+			stats.mu.Unlock()
+
 			lastOps = currentOps
+			lastSuccess = currentSuc
+			lastFail = currentFail
 			lastTime = now
 		}
 	}
@@ -389,6 +473,14 @@ func printFinalResults(stats *Stats, config *Config) {
 		fmt.Printf("P95 latency: %v\n", stats.GetPercentile(95))
 		fmt.Printf("P99 latency: %v\n", stats.GetPercentile(99))
 	}
+
+	// Print a small error histogram to help debugging
+	if len(stats.ErrorCounts) > 0 {
+		fmt.Println("\nError counts:")
+		for k, v := range stats.ErrorCounts {
+			fmt.Printf("  %s: %d\n", k, v)
+		}
+	}
 }
 
 func saveResults(stats *Stats, config *Config) error {
@@ -411,12 +503,21 @@ func saveResults(stats *Stats, config *Config) error {
 			"p50_latency_ns": stats.GetPercentile(50).Nanoseconds(),
 			"p95_latency_ns": stats.GetPercentile(95).Nanoseconds(),
 			"p99_latency_ns": stats.GetPercentile(99).Nanoseconds(),
+			"error_counts":   stats.ErrorCounts,
 		},
 	}
 
 	data, err := json.MarshalIndent(results, "", "  ")
 	if err != nil {
 		return err
+	}
+
+	if config.StdoutJSON {
+		fmt.Println(string(data))
+	}
+
+	if config.OutputFile == "" {
+		return nil
 	}
 
 	return os.WriteFile(config.OutputFile, data, 0644)

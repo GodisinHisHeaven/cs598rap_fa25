@@ -66,8 +66,21 @@ func (a *APIServer) handleKV(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		a.handleGet(w, r, key)
 	case http.MethodPost, http.MethodPut:
+		// Writes must go to the leader; followers should tell clients to retry.
+		if !a.node.IsLeader() {
+			w.Header().Set("Retry-After", "0")
+			w.Header().Set("X-Leader-ID", fmt.Sprintf("%d", a.node.GetLeader()))
+			http.Error(w, "not leader", http.StatusServiceUnavailable)
+			return
+		}
 		a.handlePut(w, r, key)
 	case http.MethodDelete:
+		if !a.node.IsLeader() {
+			w.Header().Set("Retry-After", "0")
+			w.Header().Set("X-Leader-ID", fmt.Sprintf("%d", a.node.GetLeader()))
+			http.Error(w, "not leader", http.StatusServiceUnavailable)
+			return
+		}
 		a.handleDelete(w, r, key)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -145,7 +158,15 @@ func (a *APIServer) handlePut(w http.ResponseWriter, r *http.Request, key string
 	defer cancel()
 
 	if err := a.node.ProposeAndWait(ctx, entryData); err != nil {
-		http.Error(w, fmt.Sprintf("proposal failed: %v", err), http.StatusInternalServerError)
+		// Surface leader/timeout as retryable
+		status := http.StatusInternalServerError
+		msg := err.Error()
+		if msg == "not the leader" || msg == "not the leader" || msg == "not leader" {
+			status = http.StatusServiceUnavailable
+		} else if ctx.Err() == context.DeadlineExceeded {
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(w, fmt.Sprintf("proposal failed: %v", err), status)
 		return
 	}
 

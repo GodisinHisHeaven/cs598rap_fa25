@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -61,6 +62,11 @@ func (r *RaftClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Ensure headless service exists
 	if err := r.reconcileService(ctx, &cluster); err != nil {
 		logger.Error(err, "Failed to reconcile service")
+		return ctrl.Result{}, err
+	}
+	// Ensure client ClusterIP service exists
+	if err := r.reconcileClientService(ctx, &cluster); err != nil {
+		logger.Error(err, "Failed to reconcile client service")
 		return ctrl.Result{}, err
 	}
 
@@ -144,6 +150,38 @@ func (r *RaftClusterReconciler) reconcileService(ctx context.Context, cluster *s
 	return err
 }
 
+// reconcileClientService ensures a ClusterIP service exists for client traffic
+func (r *RaftClusterReconciler) reconcileClientService(ctx context.Context, cluster *storagev1.RaftCluster) error {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cluster.Name + "-client",
+			Namespace: cluster.Namespace,
+		},
+	}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		if err := controllerutil.SetControllerReference(cluster, svc, r.Scheme); err != nil {
+			return err
+		}
+		svc.Spec = corev1.ServiceSpec{
+			Selector: map[string]string{
+				"app":     "raft-kv",
+				"cluster": cluster.Name,
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Name:     "api",
+					Port:     8080,
+					Protocol: corev1.ProtocolTCP,
+				},
+			},
+		}
+		return nil
+	})
+
+	return err
+}
+
 // reconcileStatefulSet ensures the StatefulSet exists and is up to date
 func (r *RaftClusterReconciler) reconcileStatefulSet(ctx context.Context, cluster *storagev1.RaftCluster) error {
 	sts := &appsv1.StatefulSet{
@@ -159,7 +197,7 @@ func (r *RaftClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 			return err
 		}
 
-		// Build initial peers list in nodeID=addr format
+		// Build static peer list for bootstrap stability
 		peers := ""
 		for i := int32(0); i < cluster.Spec.Replicas; i++ {
 			if i > 0 {
@@ -200,6 +238,8 @@ func (r *RaftClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 								"-api-addr=:8080",
 								"-admin-addr=:9090",
 								"-peers=" + peers,
+								"-namespace=$(POD_NAMESPACE)",
+								fmt.Sprintf("-cluster-name=%s", cluster.Name),
 								fmt.Sprintf("-safety-mode=%s", cluster.Spec.SafetyMode),
 								fmt.Sprintf("-election-timeout=%d", cluster.Spec.ElectionTimeoutMs),
 							},
@@ -212,11 +252,30 @@ func (r *RaftClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 										},
 									},
 								},
+								{
+									Name: "POD_NAMESPACE",
+									ValueFrom: &corev1.EnvVarSource{
+										FieldRef: &corev1.ObjectFieldSelector{
+											FieldPath: "metadata.namespace",
+										},
+									},
+								},
 							},
 							Ports: []corev1.ContainerPort{
 								{Name: "raft", ContainerPort: 9000},
 								{Name: "api", ContainerPort: 8080},
 								{Name: "admin", ContainerPort: 9090},
+							},
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/health",
+										Port: intstr.FromInt(8080),
+									},
+								},
+								InitialDelaySeconds: 2,
+								PeriodSeconds:       2,
+								FailureThreshold:    3,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{

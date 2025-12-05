@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Config holds server configuration
 type Config struct {
@@ -13,6 +16,12 @@ type Config struct {
 	SafetyMode        string
 	SnapshotInterval  string `json:"snapshotInterval"`
 	ElectionTimeoutMs int
+	Namespace         string
+	ClusterName       string
+	PeerPort          int
+	PeerService       string
+	EnableDiscovery   bool
+	DiscoveryMaxPeers int
 }
 
 // GetPeers parses the initial peers string into a map of node ID to address
@@ -76,4 +85,16 @@ func (c *Config) IsUnsafeEarlyVote() bool {
 // IsUnsafeNoJoint returns true if running in unsafe-no-joint mode
 func (c *Config) IsUnsafeNoJoint() bool {
 	return c.SafetyMode == "unsafe-no-joint"
+}
+
+// DeriveClusterName attempts to infer the cluster name from a StatefulSet-style
+// node ID like "kv-0". If the suffix is numeric, everything before the final
+// dash is treated as the cluster name.
+func DeriveClusterName(nodeID string) string {
+	if idx := strings.LastIndex(nodeID, "-"); idx > 0 {
+		if _, err := strconv.Atoi(nodeID[idx+1:]); err == nil {
+			return nodeID[:idx]
+		}
+	}
+	return nodeID
 }

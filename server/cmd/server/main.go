@@ -27,6 +27,12 @@ func main() {
 		safetyMode        = flag.String("safety-mode", "safe", "Safety mode: safe, unsafe-early-vote, unsafe-no-joint")
 		snapshotInterval  = flag.String("snapshot-interval", "10000", "Snapshot interval (duration string or integer ms)")
 		electionTimeoutMs = flag.Int("election-timeout", 300, "Election timeout in ms")
+		namespace         = flag.String("namespace", "", "Kubernetes namespace for peer discovery (defaults to POD_NAMESPACE)")
+		clusterName       = flag.String("cluster-name", "", "Logical cluster name used for peer discovery (defaults to derived from pod name)")
+		peerPort          = flag.Int("peer-port", 9000, "Peer port used for discovery")
+		peerService       = flag.String("peer-service", "", "Headless service name for peer discovery (defaults to <cluster>-raft)")
+		enableDiscovery   = flag.Bool("peer-discovery", true, "Enable DNS-based peer discovery when peers are not provided")
+		discoveryLimit    = flag.Int("peer-discovery-limit", 9, "Maximum peers to probe via discovery")
 	)
 	flag.Parse()
 
@@ -37,6 +43,18 @@ func main() {
 			log.Fatal("node ID not specified and cannot determine hostname")
 		}
 		*nodeID = hostname
+	}
+
+	// Fill namespace and cluster defaults
+	if *namespace == "" {
+		if envNS := os.Getenv("POD_NAMESPACE"); envNS != "" {
+			*namespace = envNS
+		} else {
+			*namespace = "default"
+		}
+	}
+	if *clusterName == "" {
+		*clusterName = config.DeriveClusterName(*nodeID)
 	}
 
 	log.Printf("Starting Raft KV Server")
@@ -58,6 +76,12 @@ func main() {
 		SafetyMode:        *safetyMode,
 		SnapshotInterval:  *snapshotInterval,
 		ElectionTimeoutMs: *electionTimeoutMs,
+		Namespace:         *namespace,
+		ClusterName:       *clusterName,
+		PeerPort:          *peerPort,
+		PeerService:       *peerService,
+		EnableDiscovery:   *enableDiscovery,
+		DiscoveryMaxPeers: *discoveryLimit,
 	}
 
 	// Ensure data directory exists

@@ -4,7 +4,7 @@ metadata:
   name: bug2-demo
 spec:
   replicas: 3
-  image: localhost:5000/raft-kv:latest
+  image: localhost:5000/raft-kv:discovery
   storageSize: 1Gi
   snapshotInterval: "30s"
   electionTimeoutMs: 300

@@ -1,0 +1,8 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='160' height='320' viewBox='0 0 160 320'>
+<style>text{font-family:Arial,sans-serif;}</style>
+<rect x='40' y='60.00' width='80' height='200.00' fill='#3778c2' />
+<text x='80.0' y='50.00' text-anchor='middle' font-size='14'>1</text>
+<text x='80.0' y='280' text-anchor='middle' font-size='14'>Safe mode</text>
+<text x='80.0' y='24' text-anchor='middle' font-size='16' font-weight='bold'>Porcupine check results</text>
+<text x='80.0' y='44' text-anchor='middle' font-size='12' fill='#555'>Linearizability violations (safe mode run)</text>
+</svg>

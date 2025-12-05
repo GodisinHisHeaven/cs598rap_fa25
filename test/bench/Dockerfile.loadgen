@@ -1,0 +1,13 @@
+FROM golang:1.22-alpine AS builder
+WORKDIR /workspace
+# Use repo go.mod; go.sum will be generated as needed
+COPY go.mod ./
+RUN go mod download
+COPY test/bench/ test/bench/
+WORKDIR /workspace/test/bench
+RUN CGO_ENABLED=0 GOOS=linux go build -o loadgen loadgen.go
+
+FROM alpine:latest
+WORKDIR /app
+COPY --from=builder /workspace/test/bench/loadgen /usr/local/bin/loadgen
+ENTRYPOINT ["/usr/local/bin/loadgen"]

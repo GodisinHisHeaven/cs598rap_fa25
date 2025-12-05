@@ -24,10 +24,9 @@ mkdir -p bench-results
 INITIAL_REPLICAS=$(kubectl get raftcluster "$CLUSTER_NAME" -o jsonpath='{.spec.replicas}')
 echo "Initial replicas: $INITIAL_REPLICAS"
 
-# Get a node to send requests to
-POD=$(kubectl get pods -l app=raft-kv -o jsonpath='{.items[0].metadata.name}')
-echo "Port-forwarding to $POD..."
-kubectl port-forward "$POD" 8080:8080 &
+# Port-forward to client service for stable access
+echo "Port-forwarding to service ${CLUSTER_NAME}-client..."
+kubectl port-forward "svc/${CLUSTER_NAME}-client" 8080:8080 &
 PF_PID=$!
 sleep 2
 
@@ -58,8 +57,8 @@ echo "Starting background load (50 QPS)..."
 LOAD_PID=$!
 
 # Wait for load to stabilize
-echo "Waiting for load to stabilize (10s)..."
-sleep 10
+echo "Waiting for load to stabilize (15s)..."
+sleep 15
 
 # Scale up
 TARGET_REPLICAS=5
@@ -83,8 +82,8 @@ while true; do
 done
 
 # Wait a bit
-echo "Waiting for cluster to stabilize (10s)..."
-sleep 10
+echo "Waiting for cluster to stabilize (20s)..."
+sleep 20
 
 # Scale down
 echo ""

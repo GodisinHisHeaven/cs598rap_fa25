@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,7 +62,8 @@ type RaftNode struct {
 	proposals   map[uint64]chan error // Index -> result channel
 
 	// Peer management
-	peers map[uint64]string // Raft ID -> Node address
+	peers        map[uint64]string // Raft ID -> Node address
+	pendingPeers map[uint64]struct{}
 
 	// Leader state
 	isLeader bool
@@ -90,17 +93,176 @@ func NewRaftNode(cfg *config.Config, store *kvstore.KVStore) (*RaftNode, error) 
 	snap := storage.NewSnapshotter(snapDir)
 
 	rn := &RaftNode{
-		cfg:         cfg,
-		store:       store,
-		wal:         wal,
-		snap:        snap,
-		proposeC:    make(chan string, 100),
-		confChangeC: make(chan raftpb.ConfChange, 10),
-		proposals:   make(map[uint64]chan error),
-		peers:       make(map[uint64]string),
+		cfg:          cfg,
+		store:        store,
+		wal:          wal,
+		snap:         snap,
+		proposeC:     make(chan string, 100),
+		confChangeC:  make(chan raftpb.ConfChange, 10),
+		proposals:    make(map[uint64]chan error),
+		peers:        make(map[uint64]string),
+		pendingPeers: make(map[uint64]struct{}),
 	}
 
 	return rn, nil
+}
+
+func (rn *RaftNode) effectiveNamespace() string {
+	if rn.cfg.Namespace != "" {
+		return rn.cfg.Namespace
+	}
+	return "default"
+}
+
+func (rn *RaftNode) effectiveClusterName() string {
+	if rn.cfg.ClusterName != "" {
+		return rn.cfg.ClusterName
+	}
+	return config.DeriveClusterName(rn.cfg.NodeID)
+}
+
+func (rn *RaftNode) peerServiceDomain() string {
+	cluster := rn.effectiveClusterName()
+	ns := rn.effectiveNamespace()
+	if rn.cfg.PeerService != "" {
+		return fmt.Sprintf("%s.%s.svc.cluster.local", rn.cfg.PeerService, ns)
+	}
+	return fmt.Sprintf("%s-raft.%s.svc.cluster.local", cluster, ns)
+}
+
+// peerAddress builds the routable Raft address for a node ID using the
+// cluster's headless service.
+func (rn *RaftNode) peerAddress(nodeID string) string {
+	host := fmt.Sprintf("%s.%s", nodeID, rn.peerServiceDomain())
+	port := rn.cfg.PeerPort
+	if port == 0 {
+		port = 9000
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// PeerAddressForNode exposes the routable Raft address for a given node ID.
+func (rn *RaftNode) PeerAddressForNode(nodeID string) string {
+	return rn.peerAddress(nodeID)
+}
+
+func (rn *RaftNode) initialPeerMap() map[string]string {
+	peerMap := rn.cfg.GetPeers()
+
+	if len(peerMap) == 0 && rn.cfg.EnableDiscovery {
+		discovered := rn.discoverPeers()
+		if len(discovered) > 0 {
+			peerMap = discovered
+		}
+	}
+
+	if len(peerMap) == 0 {
+		// Always include self so the node can bootstrap a cluster even if
+		// discovery fails (e.g., DNS not ready yet).
+		peerMap[rn.cfg.NodeID] = rn.peerAddress(rn.cfg.NodeID)
+	}
+
+	return peerMap
+}
+
+// discoverPeers performs a best-effort DNS discovery against the headless
+// service. Only nodes that resolve are returned.
+func (rn *RaftNode) discoverPeers() map[string]string {
+	peers := make(map[string]string)
+
+	maxPeers := rn.cfg.DiscoveryMaxPeers
+	if maxPeers <= 0 {
+		maxPeers = 9
+	}
+	cluster := rn.effectiveClusterName()
+
+	for i := 0; i < maxPeers; i++ {
+		nodeID := fmt.Sprintf("%s-%d", cluster, i)
+		host := fmt.Sprintf("%s.%s", nodeID, rn.peerServiceDomain())
+
+		if _, err := net.LookupHost(host); err != nil {
+			continue
+		}
+
+		port := rn.cfg.PeerPort
+		if port == 0 {
+			port = 9000
+		}
+		addr := fmt.Sprintf("%s:%d", host, port)
+		peers[nodeID] = addr
+	}
+
+	if len(peers) == 0 {
+		log.Printf("peer discovery found no peers via DNS; falling back to self")
+	} else {
+		log.Printf("peer discovery found %d peer(s): %v", len(peers), peers)
+	}
+
+	return peers
+}
+
+// discoveryLoop periodically attempts to discover and join peers without
+// requiring a rolling restart. This lets StatefulSet scale operations add
+// members dynamically.
+func (rn *RaftNode) discoveryLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		rn.mu.RLock()
+		stopped := rn.stopped
+		rn.mu.RUnlock()
+		if stopped {
+			return
+		}
+		rn.reconcileDiscoveredPeers()
+	}
+}
+
+func (rn *RaftNode) reconcileDiscoveredPeers() {
+	if !rn.IsLeader() {
+		return
+	}
+
+	discovered := rn.discoverPeers()
+	selfID := rn.nodeIDToRaftID(rn.cfg.NodeID)
+
+	for nodeID, addr := range discovered {
+		raftID := rn.nodeIDToRaftID(nodeID)
+		if raftID == selfID {
+			continue
+		}
+
+		rn.mu.RLock()
+		_, known := rn.peers[raftID]
+		_, pending := rn.pendingPeers[raftID]
+		rn.mu.RUnlock()
+		if known || pending {
+			continue
+		}
+
+		// Ensure transport knows how to reach the peer before proposing the add
+		if rn.transport != nil {
+			rn.transport.AddPeer(raftID, addr)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := rn.node.ProposeConfChange(ctx, raftpb.ConfChange{
+			Type:    raftpb.ConfChangeAddNode,
+			NodeID:  raftID,
+			Context: []byte(addr),
+		})
+		cancel()
+		if err != nil {
+			log.Printf("Failed to propose discovered peer %s (%d): %v", nodeID, raftID, err)
+			continue
+		}
+
+		rn.mu.Lock()
+		rn.pendingPeers[raftID] = struct{}{}
+		rn.mu.Unlock()
+		log.Printf("Proposed adding discovered peer %s at %s", nodeID, addr)
+	}
 }
 
 // Start starts the Raft node
@@ -179,12 +341,13 @@ func (rn *RaftNode) Start() error {
 		Logger:          &raftLogger{},
 	}
 
-	// Get initial peers
+	// Get initial peers (static list or discovered via DNS)
+	initialPeerMap := rn.initialPeerMap()
+
 	var peers []raft.Peer
 	if len(entries) == 0 && snapshot == nil {
 		// New cluster - start fresh
-		peerMap := rn.cfg.GetPeers()
-		for nodeID := range peerMap {
+		for nodeID := range initialPeerMap {
 			raftID := rn.nodeIDToRaftID(nodeID)
 			peers = append(peers, raft.Peer{ID: raftID})
 		}
@@ -202,19 +365,21 @@ func (rn *RaftNode) Start() error {
 	}
 
 	// Add initial peers to transport
-	peerMap := rn.cfg.GetPeers()
-	for nodeID, addr := range peerMap {
+	for nodeID, addr := range initialPeerMap {
 		if nodeID == rn.cfg.NodeID {
 			// Don't add self as peer
 			continue
 		}
 		peerRaftID := rn.nodeIDToRaftID(nodeID)
 		rn.transport.AddPeer(peerRaftID, addr)
+		rn.mu.Lock()
 		rn.peers[peerRaftID] = addr
+		rn.mu.Unlock()
 	}
 
 	// Start background goroutines
 	go rn.run()
+	go rn.discoveryLoop()
 
 	log.Printf("Raft node started: ID=%s, RaftID=%d", rn.cfg.NodeID, c.ID)
 	return nil
@@ -366,7 +531,7 @@ func (rn *RaftNode) run() {
 			log.Printf("[DEBUG] Applied index now: %d", rn.appliedIndex)
 
 			// Check if we need to create a snapshot
-			if rn.appliedIndex-rn.snapshotIndex >= rn.snapshotInterval  {
+			if rn.appliedIndex-rn.snapshotIndex >= rn.snapshotInterval {
 				if err := rn.createSnapshot(); err != nil {
 					log.Printf("Failed to create snapshot: %v", err)
 				}
@@ -433,18 +598,34 @@ func (rn *RaftNode) applyEntry(entry raftpb.Entry) error {
 		switch cc.Type {
 		case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
 			// Extract node address from Context
+			var addr string
 			if len(cc.Context) > 0 {
-				addr := string(cc.Context)
-				rn.peers[cc.NodeID] = addr
-				if rn.transport != nil {
-					rn.transport.AddPeer(cc.NodeID, addr)
+				addr = strings.TrimSpace(string(cc.Context))
+				// Backward-compat: if context was a nodeID, derive an address
+				if addr != "" && !strings.Contains(addr, ":") {
+					addr = rn.peerAddress(addr)
 				}
-				log.Printf("Added node: ID=%d addr=%s", cc.NodeID, addr)
-			} else {
-				log.Printf("Added node: ID=%d (no address provided)", cc.NodeID)
 			}
+
+			if addr == "" {
+				log.Printf("Added node: ID=%d (no address provided)", cc.NodeID)
+				break
+			}
+
+			rn.mu.Lock()
+			rn.peers[cc.NodeID] = addr
+			delete(rn.pendingPeers, cc.NodeID)
+			rn.mu.Unlock()
+
+			if rn.transport != nil {
+				rn.transport.AddPeer(cc.NodeID, addr)
+			}
+			log.Printf("Added node: ID=%d addr=%s", cc.NodeID, addr)
 		case raftpb.ConfChangeRemoveNode:
+			rn.mu.Lock()
 			delete(rn.peers, cc.NodeID)
+			delete(rn.pendingPeers, cc.NodeID)
+			rn.mu.Unlock()
 			if rn.transport != nil {
 				rn.transport.RemovePeer(cc.NodeID)
 			}

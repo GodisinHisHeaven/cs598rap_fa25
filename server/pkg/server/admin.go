@@ -7,9 +7,9 @@ import (
 	"net"
 
 	"github.com/cs598rap/raft-kubernetes/server/pkg/raftnode"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"go.etcd.io/etcd/raft/v3/raftpb"
 
 	pb "github.com/cs598rap/raft-kubernetes/server/pkg/adminpb"
 )
@@ -50,11 +50,19 @@ func (a *AdminServer) Stop() error {
 func (a *AdminServer) AddLearner(ctx context.Context, req *pb.AddLearnerRequest) (*pb.AddLearnerResponse, error) {
 	log.Printf("AddLearner: node_id=%s", req.NodeId)
 
+	addr := req.Address
+	if addr == "" {
+		addr = a.node.PeerAddressForNode(req.NodeId)
+	}
+	if addr == "" {
+		return nil, fmt.Errorf("unable to derive address for %s", req.NodeId)
+	}
+
 	// Create configuration change
 	cc := raftpb.ConfChange{
 		Type:    raftpb.ConfChangeAddLearnerNode,
 		NodeID:  a.nodeIDToRaftID(req.NodeId),
-		Context: []byte(req.NodeId),
+		Context: []byte(addr),
 	}
 
 	// Propose configuration change
@@ -72,6 +80,7 @@ func (a *AdminServer) AddLearner(ctx context.Context, req *pb.AddLearnerRequest)
 func (a *AdminServer) Promote(ctx context.Context, req *pb.PromoteRequest) (*pb.PromoteResponse, error) {
 	log.Printf("Promote: node_id=%s", req.NodeId)
 
+	addr := a.node.PeerAddressForNode(req.NodeId)
 	// Check if caught up (simplified - in production, check replication lag)
 	// This would be implemented by tracking apply index on each node
 
@@ -79,7 +88,7 @@ func (a *AdminServer) Promote(ctx context.Context, req *pb.PromoteRequest) (*pb.
 	cc := raftpb.ConfChange{
 		Type:    raftpb.ConfChangeAddNode,
 		NodeID:  a.nodeIDToRaftID(req.NodeId),
-		Context: []byte(req.NodeId),
+		Context: []byte(addr),
 	}
 
 	// Propose configuration change
