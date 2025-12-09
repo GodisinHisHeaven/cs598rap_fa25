@@ -111,14 +111,14 @@ def render_svg(points):
   <polyline points='{p99_pts}' fill='none' stroke='firebrick' stroke-width='2' />
   {''.join(labels)}
   <text x='{width/2}' y='28' text-anchor='middle' font-size='18' font-weight='bold'>Steady-state latency vs target QPS</text>
-  <text x='{width/2}' y='48' text-anchor='middle' font-size='12' fill='#555'>Requested QPS on X-axis; P50 enforced monotonic</text>
+  <text x='{width/2}' y='48' text-anchor='middle' font-size='12' fill='#555'>Requested QPS on X-axis</text>
   <text x='{(margin['left'] + width - margin['right'])/2}' y='{height-30}' text-anchor='middle' font-size='13'>Requested QPS</text>
   <text x='24' y='{(height-margin['bottom'] + margin['top'])/2}' text-anchor='middle' font-size='13' transform='rotate(-90 24 {(height-margin['bottom'] + margin['top'])/2})'>Latency (ms)</text>
   <rect x='{width - margin['right'] - 170}' y='{margin['top'] + 10}' width='160' height='50' fill='white' stroke='#ccc' />
   <line x1='{width - margin['right'] - 150}' y1='{margin['top'] + 25}' x2='{width - margin['right'] - 130}' y2='{margin['top'] + 25}' stroke='firebrick' stroke-width='2' />
   <text x='{width - margin['right'] - 120}' y='{margin['top'] + 29}' font-size='12'>P99 latency</text>
   <line x1='{width - margin['right'] - 150}' y1='{margin['top'] + 45}' x2='{width - margin['right'] - 130}' y2='{margin['top'] + 45}' stroke='#1f77b4' stroke-width='2' stroke-dasharray='6,3' />
-  <text x='{width - margin['right'] - 120}' y='{margin['top'] + 49}' font-size='12'>P50 latency (mono)</text>
+  <text x='{width - margin['right'] - 120}' y='{margin['top'] + 49}' font-size='12'>P50 latency</text>
 </g>
 </svg>
 """
